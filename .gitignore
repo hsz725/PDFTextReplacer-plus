@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+
+# 字体源文件（17~25MB 的可变字体，仅构建时使用）
+fonts/_src/

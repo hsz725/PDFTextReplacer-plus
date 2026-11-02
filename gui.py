@@ -130,12 +130,16 @@ class App(tk.Tk):
             self.output_pdf_path.set(path)
 
     def get_resource_path(self, relative_path):
-        """获取资源的绝对路径，用于处理打包后的情况"""
-        try:
-            # PyInstaller 创建一个临时文件夹并将路径存储在 _MEIPASS 中
-            base_path = sys._MEIPASS
-        except Exception:
-            base_path = os.path.abspath(".")
+        """获取资源的绝对路径。
+        打包后优先用 exe 同级目录，这样用户能自己往 exe 旁边放中文字体；
+        找不到才退回 PyInstaller 的临时解包目录（_MEIPASS）。
+        """
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            candidate = os.path.join(exe_dir, relative_path)
+            if os.path.exists(candidate):
+                return candidate
+        base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
         return os.path.join(base_path, relative_path)
 
     def start_processing_thread(self):

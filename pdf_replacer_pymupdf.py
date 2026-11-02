@@ -21,6 +21,129 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ======================= 字体支持（中文显示修复） =======================
+# PDF 内置的 14 种标准字体（helv / cour / timo ...）只覆盖 Latin-1 字符集，
+# 完全没有汉字字形。一旦把中文交给它们写入，就会渲染成 "···"（缺字形替身）。
+# 因此：只要新文本里出现 U+00FF 以上的字符，就必须换成带汉字字形的 TrueType 字体。
+LATIN_SAFE_MAX = 0xFF
+
+BUILTIN_FONTS = ["helv", "cour", "timo", "symb", "zadb", "times",
+                 "courier", "helvetica", "symbol", "zapfdingbats", "tiro"]
+
+# ============================ 授权声明 ============================
+# 本程序只使用开源可商用字体（SIL Open Font License 1.1：可免费商用、
+# 可嵌入文档、可再分发）：
+#     Noto Sans SC  —— 等同思源黑体，黑体风格
+#     Noto Serif SC —— 等同思源宋体，宋体风格
+# 不再调用 Windows 自带的宋体(SimSun)/黑体(SimHei)/微软雅黑(MS YaHei)/
+# 等线(DengXian) 等字体：这些字体受微软及其字体代工厂的商业授权约束，
+# 随程序分发或嵌入商用文档都存在授权风险。
+# 想换成别的开源字体，直接把 .ttf/.otf 放进 fonts 目录即可自动优先使用。
+FONT_FILE_EXTS = (".ttf", ".otf", ".ttc", ".otc")
+
+# 原文字体名 → 期望的字体风格关键词（决定优先挑哪个自带字体）
+_FONT_STYLE_HINTS = [
+    (("song", "sun", "宋", "ming", "明朝", "serif", "fang", "仿"),
+     ("serif", "song", "ming", "宋")),
+    (("hei", "黑", "yahei", "雅黑", "deng", "等线", "sans", "gothic"),
+     ("sans", "hei", "黑")),
+    (("kai", "楷"), ("kai", "楷")),
+]
+
+# 粗体/细体等非正文子重，仅在别无选择时才用
+_NON_REGULAR_MARKS = ("bold", "light", "thin", "black", "heavy",
+                      "medium", "semibold", "demibold", "italic", "oblique")
+
+# 系统中可能存在的开源中文字体（均为 OFL 授权），仅作兜底。
+# 注意：刻意不包含任何 Windows / macOS 自带商业字体。
+_OPEN_LICENSE_CJK_FONTS = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",   # 文泉驿微米黑
+]
+
+
+def needs_unicode_font(text: str) -> bool:
+    """文本里是否有超出 Latin-1 的字符（汉字、日文、全角标点等）"""
+    return any(ord(ch) > LATIN_SAFE_MAX for ch in text)
+
+
+def _font_covers(font, text: str) -> bool:
+    """字体是否覆盖 text 里的每一个有效字符"""
+    for ch in text:
+        if ch.isspace() or ord(ch) < 0x20:
+            continue
+        try:
+            if not font.has_glyph(ord(ch)):
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _list_font_files(fonts_dir: str) -> List[str]:
+    """列出 fonts 目录下的字体文件名（只取文件，跳过 _src 之类的源码目录）"""
+    files = []
+    if not fonts_dir or not os.path.isdir(fonts_dir):
+        return files
+    try:
+        for name in sorted(os.listdir(fonts_dir)):
+            path = os.path.join(fonts_dir, name)
+            if os.path.isfile(path) and name.lower().endswith(FONT_FILE_EXTS):
+                files.append(name)
+    except OSError:
+        pass
+    return files
+
+
+def find_font_for_text(text: str, fontname_hint: str = "", fonts_dir: str = None):
+    """为 text 挑一个能正常显示它的开源字体文件，找不到返回 None。
+
+    挑选顺序：
+      1. fonts 目录里风格匹配的字体（按原文字体名猜宋/黑/楷）
+      2. fonts 目录里其它正文字体
+      3. 系统中存在的开源中文字体（兜底）
+    每一档都用 has_glyph 实际校验字形覆盖，覆盖不全就继续找下一个。
+    """
+    files = _list_font_files(fonts_dir)
+    hint = (fontname_hint or "").lower()
+
+    ordered: List[str] = []
+
+    # 1) 风格匹配
+    for keys, wanted in _FONT_STYLE_HINTS:
+        if any(k in hint for k in keys):
+            ordered += [f for f in files if any(w in f.lower() for w in wanted)]
+            break
+
+    # 2) 其余正文字体（Regular 优先，粗体/细体靠后）
+    regular = [f for f in files if not any(m in f.lower() for m in _NON_REGULAR_MARKS)]
+    others = [f for f in files if f not in regular]
+    ordered += regular + others
+
+    candidates = [os.path.join(fonts_dir, f) for f in ordered] if fonts_dir else []
+    candidates += _OPEN_LICENSE_CJK_FONTS
+
+    seen = set()
+    for path in candidates:
+        if path in seen or not os.path.exists(path):
+            continue
+        seen.add(path)
+        try:
+            font = fitz.Font(fontfile=path)
+        except Exception:
+            continue
+        if _font_covers(font, text):
+            return path
+    return None
+
+
+def _font_alias(path: str) -> str:
+    """给字体文件生成一个合法的 PDF 资源名"""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    safe = "".join(ch for ch in stem if ch.isalnum()) or "CJK"
+    return f"{safe}{abs(hash(path)) % 10000}"
+
 
 class PyMuPDFTextReplacer:
     """使用PyMuPDF的文本替换器"""
@@ -41,9 +164,15 @@ class PyMuPDFTextReplacer:
 
         # 定义并创建字体目录
         self.fonts_dir = "fonts"
-        if not os.path.exists(self.fonts_dir):
-            os.makedirs(self.fonts_dir)
-            logger.info(f"创建字体目录: {self.fonts_dir}")
+        try:
+            if not os.path.exists(self.fonts_dir):
+                os.makedirs(self.fonts_dir)
+                logger.info(f"创建字体目录: {self.fonts_dir}")
+        except OSError as e:
+            logger.warning(f"字体目录创建失败（不影响使用）: {e}")
+
+        # 字体解析缓存 {fontname提示 + 文本: 字体文件路径}
+        self._font_path_cache: Dict[str, str | None] = {}
 
     def _load_rules_from_file(self, rules_file: str) -> Dict[str, str]:
         """
@@ -83,6 +212,9 @@ class PyMuPDFTextReplacer:
         """
         start_time = time.time()
         try:
+            # 先确认中文字体齐备，避免擦掉原文却写不进去，产出满屏"···"的废文件
+            self._preflight_check_fonts()
+
             if method == 'precise':
                 total_replacements = self._precise_replace_fixed(input_pdf, output_pdf)
             elif method == 'overlay':
@@ -111,14 +243,92 @@ class PyMuPDFTextReplacer:
                     return os.path.join(self.fonts_dir, f)
         return None
 
+    def _resolve_font(self, text: str, fontname_hint: str) -> str | None:
+        """带缓存地为 text 找一个能显示它的字体文件"""
+        key = f"{fontname_hint}\x00{text}"
+        if key not in self._font_path_cache:
+            path = find_font_for_text(text, fontname_hint, self.fonts_dir)
+            if path:
+                logger.info(f"文本 '{text[:20]}' 使用字体: {os.path.basename(path)}")
+            else:
+                logger.warning(f"未找到能显示 '{text[:20]}' 的字体，"
+                               f"请往 fonts 目录放入一个中文字体（.ttf/.otf）")
+            self._font_path_cache[key] = path
+        return self._font_path_cache[key]
+
+    def _preflight_check_fonts(self) -> None:
+        """替换前先确认所有含中文的新文本都能找到字体。
+
+        否则原文字已经被擦掉、新文字又写不进去，只会留下一串"···"的废文件。
+        """
+        missing = [t for t in self.rules.values()
+                   if needs_unicode_font(t) and not find_font_for_text(t, "", self.fonts_dir)]
+        if missing:
+            sample = "、".join(t[:15] for t in missing[:5])
+            more = f" 等 {len(missing)} 条" if len(missing) > 5 else ""
+            raise RuntimeError(
+                f"缺少可用的中文字体，无法写入：{sample}{more}。\n"
+                f"请把开源中文字体（.ttf/.otf，例如思源黑体 / Noto Sans SC）"
+                f"放入字体目录：{os.path.abspath(self.fonts_dir)}"
+            )
+
+    @staticmethod
+    def _subset_fonts(doc) -> None:
+        """保存前做字体子集化：只保留实际用到的字形，
+        否则每份输出 PDF 都会把整份中文字体（2~3MB）塞进去。"""
+        try:
+            doc.subset_fonts()
+        except Exception as e:
+            logger.debug(f"字体子集化跳过（不影响结果）: {e}")
+
+    def _write_text(self, page, x: float, baseline: float, text: str,
+                    fontname: str, fontsize: float, color) -> bool:
+        """
+        把 text 写到 (x, baseline)，自动挑选能覆盖该文本的字体。
+
+        关键修复：原代码查不到字体时一律回退到内置 'helv'，而 helv 没有汉字字形，
+        所以中文替换结果会变成 "···"。这里改为：只要含非 Latin-1 字符，
+        就强制使用一个带汉字字形的 TrueType 字体。
+        """
+        point = fitz.Point(x, baseline)
+
+        # ① 含中文等非 Latin-1 字符：必须用带汉字字形的 TrueType 字体
+        if needs_unicode_font(text):
+            path = self._resolve_font(text, fontname)
+            if path:
+                alias = _font_alias(path)
+                try:
+                    page.insert_font(fontfile=path, fontname=alias)
+                    page.insert_text(point, text, fontname=alias,
+                                     fontsize=fontsize, color=color)
+                    return True
+                except Exception as e:
+                    logger.warning(f"用 {os.path.basename(path)} 写入失败({e})，尝试其它方式")
+
+        # ② 纯西文文本：沿用原有逻辑（优先使用 fonts 目录里的同名字体）
+        font_to_use, font_file_path = fontname, None
+        if font_to_use.lower().split("-")[0] not in BUILTIN_FONTS:
+            font_file_path = self._find_local_font(font_to_use)
+            if not font_file_path:
+                logger.warning(f"字体 '{font_to_use}' 未找到，改用 'helv'")
+                font_to_use = "helv"
+
+        try:
+            if font_file_path:
+                page.insert_font(fontfile=font_file_path, fontname=font_to_use)
+            page.insert_text(point, text, fontname=font_to_use,
+                             fontsize=fontsize, color=color)
+            return True
+        except Exception as e:
+            logger.error(f"写入文本 '{text}' 失败: {e}")
+            return False
+
     def _precise_replace_fixed(self, input_pdf: str, output_pdf: str) -> int:
         """
         修复版精确替换方法：采用“查找-擦除-写入”三步法，并精确对齐基线。
         """
         logger.info("使用修复版精确替换方法...")
         total_replacements = 0
-        BUILTIN_FONTS = ["helv", "cour", "timo", "symb", "zadb", "times", "courier", "helvetica", "symbol",
-                         "zapfdingbats"]
 
         doc = fitz.open(input_pdf)
         logger.info(f"打开PDF文件成功，共 {len(doc)} 页")
@@ -166,35 +376,15 @@ class PyMuPDFTextReplacer:
 
             # 3. 写入：在擦除后的空白区域写入新文本
             for action in actions:
-                font_to_use = action["fontname"]
-                font_file_path = None
-
-                # 检查是否是自定义字体并查找文件
-                is_custom_font = font_to_use.lower().split("-")[0] not in BUILTIN_FONTS
-                if is_custom_font:
-                    font_file_path = self._find_local_font(font_to_use)
-                    if not font_file_path:
-                        logger.warning(f"警告: 字体 '{font_to_use}' 未找到，将使用 'helv' 替换。")
-                        font_to_use = "helv"
-
-                try:
-                    # 对于自定义字体，需要先将其注册到页面
-                    if font_file_path:
-                        page.insert_font(fontfile=font_file_path, fontname=font_to_use)
-
-                    # 核心改动：使用精确的插入点 (rect.x0, baseline)
-                    insertion_point = fitz.Point(action["rect"].x0, action["baseline"])
-                    page.insert_text(insertion_point,
-                                     action["new_text"],
-                                     fontname=font_to_use,
-                                     fontsize=action["fontsize"],
-                                     color=action["color"])
-                except Exception as e:
-                    logger.error(f"写入文本 '{action['new_text']}' 失败: {e}")
+                # 使用精确的插入点 (rect.x0, baseline)，字体由 _write_text 自动挑选
+                self._write_text(page, action["rect"].x0, action["baseline"],
+                                 action["new_text"], action["fontname"],
+                                 action["fontsize"], action["color"])
 
             total_replacements += len(actions)
             logger.info(f"页面 {page_num + 1}: 完成 {len(actions)} 处替换")
 
+        self._subset_fonts(doc)
         doc.save(output_pdf, garbage=4, deflate=True, clean=True)
         doc.close()
         return total_replacements
@@ -242,22 +432,22 @@ class PyMuPDFTextReplacer:
                     shape.finish(color=(1, 1, 1), fill=(1, 1, 1), width=0)
                     shape.commit()
                     insert_point = fitz.Point(rect.x0, font_info['baseline'])
-                    try:
-                        rc = page.insert_text(insert_point, repl['new_text'], fontname=font_info['fontname'],
-                                              fontsize=font_info['fontsize'], color=font_info['color'])
-                        if rc < 0: raise Exception("插入失败")
-                    except:
-                        logger.debug(f"使用原始字体 {font_info['fontname']} 失败，使用标准字体")
-                        page.insert_text(insert_point, repl['new_text'], fontsize=font_info['fontsize'],
-                                         color=font_info['color'])
+                    self._write_text(page, rect.x0, font_info['baseline'],
+                                     repl['new_text'], font_info['fontname'],
+                                     font_info['fontsize'], font_info['color'])
                     page_replacements += 1
 
             if page_replacements > 0:
                 total_replacements += page_replacements
                 logger.info(f"页面 {page_num + 1}: 完成 {page_replacements} 处替换")
 
-        doc.save(output_pdf, incremental=False, garbage=4, deflate=True)
+        # 修复：doc 就是 output_pdf 本身，不能直接以非增量方式覆盖保存，
+        # 否则 PyMuPDF 报 "save to original must be incremental"。先存临时文件再替换。
+        tmp_out = output_pdf + ".tmp"
+        self._subset_fonts(doc)
+        doc.save(tmp_out, garbage=4, deflate=True)
         doc.close()
+        os.replace(tmp_out, output_pdf)
         return total_replacements
 
     def _hybrid_replace(self, input_pdf: str, output_pdf: str) -> int:
