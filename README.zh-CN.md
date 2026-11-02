@@ -1,16 +1,30 @@
-# PDF 文本替换工具 (RepliPDF)
+# PDF 工具箱 (PDFTextReplacer-plus)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 ---
 
-一个简单易用的Windows桌面应用，用于批量替换PDF文件中的文本。基于 Python、Tkinter 和 PyMuPDF 构建。它能帮助您轻松地查找和替换PDF文档中的文字，同时保留原有的字体和布局。
+一个 Windows 桌面 PDF 处理小工具，基于 Python、Tkinter 和 PyMuPDF 构建。
+源自 [ShawnJim/PDFTextReplacer](https://github.com/ShawnJim/PDFTextReplacer)（MIT），
+在此基础上修复了中文显示问题、改用开源可商用字体，并新增了区域擦除功能。
+
+## 📦 两个版本
+
+两个版本由**同一份源码**构建，精简版只是不显示擦除页。两者体积几乎相同，
+请按使用场景选择，不必看体积。
+
+| 版本 | 文件 | 功能 |
+|---|---|---|
+| **完整版** | `PDF工具箱.exe` | 文本替换 **+** 区域擦除 |
+| **精简版** | `PDF文本替换工具.exe` | 仅文本替换，单屏界面 |
+
+两个都是单文件 exe，下载即用，不需要安装，也不需要旁边的任何文件夹。
 
 ![应用截图](img.png)
 
 ## ✨ 功能特性
 
-程序有两个功能页，用标签切换，共用同一个输入/输出文件。
+完整版有两个功能页，用标签切换，共用同一个输入/输出文件；精简版只有第一页。
 
 ### 一、文本替换
 
@@ -89,30 +103,23 @@ pip install pyinstaller
 python gui.py
 ```
 
-### 5. 打包成 .exe 文件
+### 5. 打包成 exe
 
-字体要一起打进包里。注意 `fonts/_src/` 是构建用的原始可变字体（40MB+），**不要**打包进去，
-所以先挑出真正要分发的字体文件：
+一个脚本搞定两个版本：
 
 ```bash
-mkdir -p build/fonts_pack
-cp fonts/NotoSansSC-Regular.ttf fonts/NotoSerifSC-Regular.ttf \
-   fonts/LiberationSans-Bold.ttf fonts/OFL.txt fonts/README.md build/fonts_pack/
-
-pyinstaller --noconsole --onefile --name "PDF工具箱" \
-  --add-data "<项目绝对路径>/build/fonts_pack;fonts" \
-  --exclude-module onnxruntime --exclude-module pymupdf_layout --exclude-module pymupdf4llm \
-  --exclude-module networkx --exclude-module protobuf --exclude-module flatbuffers \
-  --exclude-module tabulate --exclude-module psutil --exclude-module yaml \
-  --exclude-module PIL --exclude-module fontTools \
-  --distpath . --workpath build/tmp --specpath build gui.py
+python tools/build.py          # 两个版本都打
+python tools/build.py --lite   # 只打精简版
+python tools/build.py --full   # 只打完整版
 ```
 
-- `--onefile`: 打成单个 exe，字体以资源形式内嵌，运行时解压到临时目录。
-- `--add-data` 的源路径要用**绝对路径**（因为 `--specpath` 会让相对路径相对 spec 目录解析）。
-- `--exclude-module`: 排除 PyMuPDF 附带的 layout/OCR 相关大包，能把体积从 66MB 降到 44MB。
+脚本做了三件容易踩坑的事：
 
-打包完清掉 `build/` 即可，目录里只留一个 exe。
+- 只把要分发的字体挑到 `build/fonts_pack`，不把 `fonts/_src` 里 40MB+ 的原始可变字体打进去；
+- `--add-data` 用绝对路径（`--specpath` 会让相对路径相对 spec 目录解析）；
+- 排除 PyMuPDF 附带的 layout/OCR 大依赖，体积从 66MB 降到 43MB。
+
+产物直接输出到仓库根目录，打完自动清掉 `build/`。
 
 ### 6. 打包后自检
 
@@ -123,6 +130,15 @@ exe 是窗口程序没有控制台，自检结果会写到 `%TEMP%\pdfbox_selfte
 ```
 
 它会验证：字体是否随包解出、中文替换是否正常、区域擦除是否正常。退出码 0 表示通过。
+
+## 📄 开源许可
+
+本项目采用 MIT 许可，详见 [LICENSE](LICENSE)。
+
+内置字体 Noto Sans SC / Noto Serif SC 采用 SIL Open Font License 1.1，
+详见 [fonts/OFL.txt](fonts/OFL.txt)。
+
+本项目基于 [ShawnJim/PDFTextReplacer](https://github.com/ShawnJim/PDFTextReplacer)。
 
 ## 命令行用法 (高级)
 
@@ -139,6 +155,3 @@ python pdf_replacer_pymupdf.py <输入PDF> <输出PDF> <规则文件> [--method 
 python pdf_replacer_pymupdf.py document.pdf document_updated.pdf rules.txt --verify
 ```
 
-## 📄 开源许可
-
-本项目采用 MIT 许可。详情请见 [LICENSE](LICENSE) 文件。

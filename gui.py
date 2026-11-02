@@ -27,6 +27,11 @@ from pdf_eraser import (EraseTask, detect_background_color, erase_document,
 
 PT_PER_MM = 72.0 / 25.4
 
+# 精简版开关：True 时不创建"区域擦除"标签页，界面只保留文本替换。
+# 由入口脚本（tools/entry_lite.py）在创建窗口前设置，打包时通过不同入口区分版本。
+# 注意：必须在 App() 实例化之前赋值才生效。
+LITE_MODE = False
+
 
 def resource_path(relative_path: str) -> str:
     """获取随程序分发的资源路径（主要是 fonts 目录）。
@@ -64,7 +69,7 @@ class TextHandler(logging.Handler):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PDF 文本替换 / 区域擦除工具")
+        self.title("PDF 文本替换工具" if LITE_MODE else "PDF 工具箱（文本替换 / 区域擦除）")
         self.geometry("820x800")  # 稍后按内容自动调整
 
         # --- 变量 ---
@@ -75,7 +80,7 @@ class App(tk.Tk):
         self.method = tk.StringVar(value='precise')
         self.verify = tk.BooleanVar(value=True)
 
-        # 区域擦除
+        # 区域擦除（Lite 版不建这些控件，但变量先建好，避免回调里取不到）
         self.page_no = tk.StringVar(value="1")
         self.unit = tk.StringVar(value="pt")          # pt / mm
         self.rect_x = tk.StringVar(value="0")
@@ -96,11 +101,17 @@ class App(tk.Tk):
         file_frame.pack(fill=tk.X, pady=5)
         self._create_file_widgets(file_frame)
 
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        self._create_text_tab()
-        self._create_erase_tab()
+        if LITE_MODE:
+            # 精简版：只有一个功能，不套标签页，界面更直接
+            self.notebook = None
+            text_tab = ttk.Frame(main_frame)
+            text_tab.pack(fill=tk.BOTH, expand=True, pady=5)
+            self._create_text_tab(text_tab)
+        else:
+            self.notebook = ttk.Notebook(main_frame)
+            self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+            self._create_text_tab(self.notebook)
+            self._create_erase_tab(self.notebook)
 
         run_button = ttk.Button(main_frame, text="开始处理", command=self.start_processing_thread)
         run_button.pack(pady=8, fill=tk.X)
@@ -109,9 +120,10 @@ class App(tk.Tk):
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         self._create_log_widget(log_frame)
 
-        # 页码 / 单位变化时刷新页面信息
-        self.page_no.trace_add("write", lambda *_: self._update_page_display())
-        self.unit.trace_add("write", lambda *_: self._update_page_display())
+        if not LITE_MODE:
+            # 页码 / 单位变化时刷新页面信息
+            self.page_no.trace_add("write", lambda *_: self._update_page_display())
+            self.unit.trace_add("write", lambda *_: self._update_page_display())
 
         self._fit_window()
 
@@ -122,14 +134,15 @@ class App(tk.Tk):
         另一个页的底部被裁掉。
         """
         self.update_idletasks()
-        current = self.notebook.select()
         need_h = self.winfo_reqheight()
-        for tab in self.notebook.tabs():
-            self.notebook.select(tab)
+        if self.notebook is not None:
+            current = self.notebook.select()
+            for tab in self.notebook.tabs():
+                self.notebook.select(tab)
+                self.update_idletasks()
+                need_h = max(need_h, self.winfo_reqheight())
+            self.notebook.select(current)
             self.update_idletasks()
-            need_h = max(need_h, self.winfo_reqheight())
-        self.notebook.select(current)
-        self.update_idletasks()
 
         need_w = max(820, self.winfo_reqwidth())
         # 预留一点余量：ttk 的 reqheight 对嵌套 LabelFrame 会略微低估
@@ -149,9 +162,13 @@ class App(tk.Tk):
         parent.columnconfigure(1, weight=1)
 
     # ---------------- 文本替换页 ----------------
-    def _create_text_tab(self):
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="文本替换")
+    def _create_text_tab(self, parent):
+        """parent 是 Notebook 时作为标签页加入；否则直接铺在容器里（精简版）"""
+        if isinstance(parent, ttk.Notebook):
+            tab = ttk.Frame(parent)
+            parent.add(tab, text="文本替换")
+        else:
+            tab = parent
 
         rules_frame = ttk.LabelFrame(tab, text="替换规则 (格式: 原文|译文)", padding="10")
         rules_frame.pack(fill=tk.BOTH, expand=True, pady=5)
@@ -181,9 +198,9 @@ class App(tk.Tk):
         verify_check.pack(side=tk.RIGHT, padx=20)
 
     # ---------------- 区域擦除页 ----------------
-    def _create_erase_tab(self):
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="区域擦除")
+    def _create_erase_tab(self, parent):
+        tab = ttk.Frame(parent)
+        parent.add(tab, text="区域擦除")
 
         # 页码
         page_frame = ttk.LabelFrame(tab, text="页面", padding=8)
@@ -431,6 +448,9 @@ class App(tk.Tk):
         processing_thread.start()
 
     def _dispatch(self):
+        if self.notebook is None:
+            self.process_text_replace()
+            return
         if self.notebook.index(self.notebook.select()) == 0:
             self.process_text_replace()
         else:
@@ -648,8 +668,11 @@ def run_selftest() -> int:
     return finish(0 if ok else 1)
 
 
-if __name__ == '__main__':
+def main() -> None:
     if "--selftest" in sys.argv:
         sys.exit(run_selftest())
-    app = App()
-    app.mainloop()
+    App().mainloop()
+
+
+if __name__ == '__main__':
+    main()

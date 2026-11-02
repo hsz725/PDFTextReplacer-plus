@@ -1,14 +1,29 @@
-# PDF Text Replacer (RepliPDF)
+# PDF Text Replacer Plus
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 ---
 
-A user-friendly Windows desktop application for batch text replacement in PDF files, built with Python, Tkinter, and PyMuPDF. This tool makes it easy to find and replace text across multiple PDF documents while preserving the original fonts and layout.
- 
-![App Screenshot](img.png)
+A Windows desktop tool for editing PDF content, built with Python, Tkinter, and PyMuPDF.
+Based on [ShawnJim/PDFTextReplacer](https://github.com/ShawnJim/PDFTextReplacer) (MIT),
+extended with region erasing, open-license CJK fonts, and a light build.
+
+## 📦 Two Editions
+
+Both editions are built from the **same source code** — the light edition simply hides
+the erase tab. They are almost identical in size, so pick by workflow, not by size.
+
+| Edition | File | Features |
+|---|---|---|
+| **Full** | `PDF工具箱.exe` | Text replacement **+** region erasing |
+| **Light** | `PDF文本替换工具.exe` | Text replacement only, single-screen UI |
+
+Download either one from the [Releases](../../releases) page. Both are single-file
+executables — no installation, no extra folders.
 
 ## ✨ Key Features
+
+### Text replacement
 
 - **Intuitive GUI**: A simple graphical interface for all operations, no command line needed.
 - **Dynamic Rule Editor**: Add, edit, or paste replacement rules (`old_text|new_text`) directly within the application.
@@ -16,14 +31,24 @@ A user-friendly Windows desktop application for batch text replacement in PDF fi
   - **`precise`**: (Default) Accurately finds and replaces text, preserving original fonts, sizes, and colors.
   - **`overlay`**: Covers the original text with a white rectangle before writing the new text, ensuring maximum compatibility.
   - **`hybrid`**: Automatically selects the best strategy for each replacement.
-- **Custom Font Support**: Simply place your `.ttf` or `.otf` font files into the `fonts` folder to use them in replacements.
-- **Live Logging**: See the replacement process, counts, and any potential issues in real-time.
-- **Result Verification**: Optionally verify that all instances of the old text have been removed after the process is complete.
-- **Standalone `.exe`**: Packaged with PyInstaller to run on Windows without a Python environment.
+- **Open-license CJK fonts**: Ships with Noto Sans SC / Noto Serif SC (SIL OFL 1.1) and
+  picks serif/sans to match the original text. No commercial system fonts are used.
+- **Live Logging** and **Result Verification**.
+
+### Region erasing (full edition only)
+
+- Erase **everything** inside a rectangle: text, images, vector graphics — not just text.
+- Rectangle defined by top-left corner + width/height, in `pt` or `mm`.
+- Background color is sampled from the page, so the erased area blends in.
+- **Preview** the rectangle on the page before applying.
+
+> Coordinates use a **top-left origin** (X right, Y down), matching Acrobat / Foxit
+> measurement tools. The PDF file format's bottom-left origin is handled internally.
+
 
 ## 🚀 How to Use (For End-Users)
 
-1.  Download and run `PDF Replacer.exe` from the [Releases](https://github.com/ShawnJim/PDFTextReplacer/releases) page.
+1.  Download either `PDF工具箱.exe` (full) or `PDF文本替换工具.exe` (light) from the [Releases](../../releases) page.
 2.  **Select Input PDF**: Click "Browse..." to choose the PDF file you want to modify.
 3.  **Specify Output PDF**: An output path with an `_replaced` suffix is automatically generated. You can also click "Select..." to customize the destination.
 4.  **Enter Replacement Rules**: In the "Replacement Rules" text box, enter your rules using the `old_text|new_text` format, one rule per line. For example:
@@ -48,8 +73,8 @@ If you want to run from source or rebuild the application, follow these steps.
 
 ```bash
 # Clone the repository
-git clone https://github.com/ShawnJim/PDFTextReplacer.git
-cd PDFTextReplacer
+git clone https://github.com/hsz725/PDFTextReplacer-plus.git
+cd PDFTextReplacer-plus
 
 # Create and activate a virtual environment (recommended)
 python -m venv .venv
@@ -72,18 +97,28 @@ pip install pyinstaller
 python gui.py
 ```
 
-### 5. Package into an .exe File
+### 5. Package the executables
 
-Make sure the `fonts` folder (with any custom fonts) is in the project root. Then, run the following command:
+One script builds both editions:
 
 ```bash
-pyinstaller --noconsole --onefile --name "PDF Replacer" --add-data "fonts;fonts" gui.py
+python tools/build.py          # both
+python tools/build.py --lite   # light only
+python tools/build.py --full   # full only
 ```
-- `--noconsole`: Prevents the command-line window from appearing when the .exe is run.
-- `--onefile`: Bundles everything into a single executable file.
-- `--add-data "fonts;fonts"`: Ensures the `fonts` folder is included in the package.
 
-The final `PDF Replacer.exe` will be located in the `dist` folder.
+It stages only the distributable fonts (skipping `fonts/_src`, which holds the 40MB+
+variable font sources) and excludes PyMuPDF's layout/OCR dependencies, keeping each
+exe at ~43MB instead of ~66MB. Output goes to the repository root.
+
+### 6. Verify a build
+
+```bash
+"PDF工具箱.exe" --selftest
+```
+
+Runs the replacement and erase pipelines without opening the GUI, and writes the result
+to `%TEMP%\pdfbox_selftest.log` (windowed executables have no console). Exit code 0 = pass.
 
 ## Command-Line Usage (Advanced)
 
@@ -103,3 +138,8 @@ python pdf_replacer_pymupdf.py document.pdf document_updated.pdf rules.txt --ver
 ## 📄 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+Bundled fonts (Noto Sans SC, Noto Serif SC) are licensed under the SIL Open Font
+License 1.1 — see [fonts/OFL.txt](fonts/OFL.txt).
+
+Based on [ShawnJim/PDFTextReplacer](https://github.com/ShawnJim/PDFTextReplacer).
