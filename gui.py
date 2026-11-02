@@ -33,6 +33,24 @@ PT_PER_MM = 72.0 / 25.4
 LITE_MODE = False
 
 
+def font_dirs() -> list:
+    """返回字体搜索目录列表（按优先级）。
+
+    exe 同级目录优先，程序内置目录兜底——两者**同时**参与查找。
+    这样用户即使在 exe 旁边建了个 fonts 目录但没放字体，
+    也不会把程序自带的字体屏蔽掉。
+    """
+    dirs = []
+    if getattr(sys, 'frozen', False):
+        beside_exe = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "fonts")
+        if os.path.isdir(beside_exe):
+            dirs.append(beside_exe)
+    bundled = os.path.join(getattr(sys, '_MEIPASS', os.path.abspath(".")), "fonts")
+    if os.path.isdir(bundled) and bundled not in dirs:
+        dirs.append(bundled)
+    return dirs
+
+
 def resource_path(relative_path: str) -> str:
     """获取随程序分发的资源路径（主要是 fonts 目录）。
 
@@ -79,6 +97,8 @@ class App(tk.Tk):
         # 文本替换
         self.method = tk.StringVar(value='precise')
         self.verify = tk.BooleanVar(value=True)
+        self.font_scope = tk.StringVar(value="open")   # open=仅开源 / all=含系统字体
+        self.custom_font = None                        # 用户临时指定的字体文件
 
         # 区域擦除（Lite 版不建这些控件，但变量先建好，避免回调里取不到）
         self.page_no = tk.StringVar(value="1")
@@ -119,6 +139,8 @@ class App(tk.Tk):
         log_frame = ttk.LabelFrame(main_frame, text="日志", padding="10")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         self._create_log_widget(log_frame)
+
+        self.font_scope.trace_add("write", lambda *_: self._update_font_scope_hint())
 
         if not LITE_MODE:
             # 页码 / 单位变化时刷新页面信息
@@ -189,13 +211,37 @@ class App(tk.Tk):
 """)
 
     def _create_options_widgets(self, parent):
-        ttk.Label(parent, text="替换方法:").pack(side=tk.LEFT, padx=5)
+        # 第一行：替换方法 + 验证
+        ttk.Label(parent, text="替换方法:").grid(row=0, column=0, sticky=tk.W, padx=(2, 4), pady=3)
         methods = ['precise', 'overlay', 'hybrid']
-        method_menu = ttk.OptionMenu(parent, self.method, self.method.get(), *methods)
-        method_menu.pack(side=tk.LEFT, padx=5)
+        ttk.OptionMenu(parent, self.method, self.method.get(), *methods).grid(
+            row=0, column=1, sticky=tk.W)
+        ttk.Checkbutton(parent, text="处理后验证结果", variable=self.verify).grid(
+            row=0, column=3, sticky=tk.E, padx=(7, 10))
 
-        verify_check = ttk.Checkbutton(parent, text="处理后验证结果", variable=self.verify)
-        verify_check.pack(side=tk.RIGHT, padx=20)
+        # 第二行：字体范围（默认仅开源，保证产出可直接分发）
+        ttk.Label(parent, text="字体范围:").grid(row=1, column=0, sticky=tk.W, padx=(2, 4), pady=3)
+        scope = ttk.Frame(parent)
+        scope.grid(row=1, column=1, columnspan=2, sticky=tk.W)
+        ttk.Radiobutton(scope, text="仅使用开源字体", value="open",
+                        variable=self.font_scope).pack(side=tk.LEFT)
+        ttk.Radiobutton(scope, text="使用所有字体（含系统字体）", value="all",
+                        variable=self.font_scope).pack(side=tk.LEFT, padx=(12, 0))
+        self.font_scope_hint = ttk.Label(parent, text="", foreground="#888888")
+        self.font_scope_hint.grid(row=1, column=3, sticky=tk.E, padx=(7, 10))
+
+        # 第三行：临时指定字体文件
+        ttk.Label(parent, text="自定义字体:").grid(row=2, column=0, sticky=tk.W, padx=(2, 4), pady=3)
+        font_row = ttk.Frame(parent)
+        font_row.grid(row=2, column=1, columnspan=3, sticky=tk.W)
+        self.font_file_label = ttk.Label(font_row, text="未指定", foreground="#888888")
+        self.font_file_label.pack(side=tk.LEFT)
+        ttk.Button(font_row, text="选择字体文件…", command=self.pick_font_file).pack(
+            side=tk.LEFT, padx=(10, 4))
+        ttk.Button(font_row, text="清除", command=self.clear_font_file).pack(side=tk.LEFT)
+
+        parent.columnconfigure(1, weight=1)
+        self._update_font_scope_hint()
 
     # ---------------- 区域擦除页 ----------------
     def _create_erase_tab(self, parent):
@@ -362,6 +408,33 @@ class App(tk.Tk):
             if own_doc is not None:
                 own_doc.close()
 
+    # ---------------- 字体设置 ----------------
+    def _update_font_scope_hint(self):
+        """根据字体范围给出提示，让用户清楚现在会读到哪些字体"""
+        if self.font_scope.get() == "all":
+            text = "会读取系统字体（宋体/黑体/雅黑等），仅建议自用"
+        else:
+            text = "只用内置及 fonts 目录里的开源字体，产出可放心分发"
+        self.font_scope_hint.config(text=text)
+
+    def pick_font_file(self):
+        """临时指定一个字体文件（本机自用系统字体时最方便，不用复制文件）"""
+        path = filedialog.askopenfilename(
+            title="选择字体文件",
+            filetypes=[("字体文件", "*.ttf *.otf *.ttc"), ("所有文件", "*.*")],
+            initialdir=r"C://Windows//Fonts" if os.path.isdir(r"C://Windows//Fonts") else None,
+        )
+        if not path:
+            return
+        self.custom_font = path
+        self.font_file_label.config(text=os.path.basename(path), foreground="#333333")
+        logging.info(f"已指定字体文件: {path}")
+
+    def clear_font_file(self):
+        self.custom_font = None
+        self.font_file_label.config(text="未指定", foreground="#888888")
+        logging.info("已清除自定义字体")
+
     # ---------------- 预览 ----------------
     def preview_rect(self):
         """把待擦除矩形画在页面副本上，弹窗预览"""
@@ -496,8 +569,13 @@ class App(tk.Tk):
             logging.info("=" * 30)
             logging.info("开始文本替换...")
             replacer = PyMuPDFTextReplacer(rules)
-            replacer.fonts_dir = self.get_resource_path('fonts')
-            logging.info(f"字体目录设置为: {replacer.fonts_dir}")
+            replacer.fonts_dirs = font_dirs()
+            replacer.allow_system_fonts = (self.font_scope.get() == "all")
+            replacer.extra_fonts = [self.custom_font] if self.custom_font else []
+            logging.info(f"字体目录: {replacer.fonts_dirs}")
+            logging.info(f"字体范围: {'含系统字体' if replacer.allow_system_fonts else '仅开源字体'}"
+                         + (f"；自定义字体: {os.path.basename(self.custom_font)}"
+                            if self.custom_font else ""))
 
             replacer.replace_pdf(input_pdf, output_pdf, method=self.method.get())
 
@@ -610,16 +688,17 @@ def run_selftest() -> int:
             pass
         return code
 
-    fonts_dir = resource_path("fonts")
-    log(f"[自检] 字体目录: {fonts_dir}")
-    if not os.path.isdir(fonts_dir):
+    fonts_dirs = font_dirs()
+    log(f"[自检] 字体目录: {fonts_dirs}")
+    if not fonts_dirs:
         log("[自检] 失败：找不到 fonts 目录")
         return finish(2)
 
-    font_files = sorted(f for f in os.listdir(fonts_dir)
-                        if f.lower().endswith((".ttf", ".otf")))
+    font_files = []
+    for d in fonts_dirs:
+        font_files += sorted(f for f in os.listdir(d) if f.lower().endswith((".ttf", ".otf")))
     log(f"[自检] 字体文件: {font_files}")
-    cjk_font = next((os.path.join(fonts_dir, f) for f in font_files
+    cjk_font = next((os.path.join(fonts_dirs[0], f) for f in font_files
                      if "NotoSansSC" in f), None)
     if not cjk_font:
         log("[自检] 失败：没有中文字体")
@@ -644,7 +723,8 @@ def run_selftest() -> int:
 
     # 1) 中文替换
     replacer = PyMuPDFTextReplacer({"旧公司名称": "新公司名称"})
-    replacer.fonts_dir = fonts_dir
+    replacer.fonts_dirs = fonts_dirs
+    replacer.allow_system_fonts = False
     replacer.replace_pdf(src, out_replace, method="precise")
     text = pymupdf.open(out_replace)[0].get_text()
     if "新公司名称" in text:

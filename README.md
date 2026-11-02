@@ -32,7 +32,12 @@ executables — no installation, no extra folders.
   - **`overlay`**: Covers the original text with a white rectangle before writing the new text, ensuring maximum compatibility.
   - **`hybrid`**: Automatically selects the best strategy for each replacement.
 - **Open-license CJK fonts**: Ships with Noto Sans SC / Noto Serif SC (SIL OFL 1.1) and
-  picks serif/sans to match the original text. No commercial system fonts are used.
+  matches the original font style by the font's **internal family name**
+  (SimSun → Noto Serif, SimHei → Noto Sans).
+- **Font scope switch**: *Open-source only* (default, output is safe to redistribute) or
+  *All fonts* (also reads Windows system fonts — personal use only).
+- **Custom font file**: point to any `.ttf`/`.otf`/`.ttc` without copying it;
+  it takes priority over everything else.
 - **Live Logging** and **Result Verification**.
 
 ### Region erasing (full edition only)

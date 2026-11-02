@@ -41,18 +41,34 @@ BUILTIN_FONTS = ["helv", "cour", "timo", "symb", "zadb", "times",
 # 想换成别的开源字体，直接把 .ttf/.otf 放进 fonts 目录即可自动优先使用。
 FONT_FILE_EXTS = (".ttf", ".otf", ".ttc", ".otc")
 
-# 原文字体名 → 期望的字体风格关键词（决定优先挑哪个自带字体）
+# 原文字体名 → 期望的字体风格关键词。
+# 左边是"原文字体名里出现这些词"，右边是"候选字体**内部名称**里出现这些词"。
+# 注意右边要按字体真实名称来写：SimSun 的家族名是 "SimSun Regular"，
+# 里面既没有 song 也没有 ming，所以必须写 sun。
 _FONT_STYLE_HINTS = [
     (("song", "sun", "宋", "ming", "明朝", "serif", "fang", "仿"),
-     ("serif", "song", "ming", "宋")),
+     ("serif", "song", "sun", "ming", "宋")),
     (("hei", "黑", "yahei", "雅黑", "deng", "等线", "sans", "gothic"),
-     ("sans", "hei", "黑")),
+     ("sans", "hei", "黑", "deng")),
     (("kai", "楷"), ("kai", "楷")),
 ]
 
 # 粗体/细体等非正文子重，仅在别无选择时才用
 _NON_REGULAR_MARKS = ("bold", "light", "thin", "black", "heavy",
                       "medium", "semibold", "demibold", "italic", "oblique")
+
+# 系统中可能存在的商业中文字体（Windows / macOS 自带，受厂商授权约束）。
+# 默认**不读取**；只有用户在界面上主动选择"使用所有字体"时才会用到。
+# 本机自用没问题，但绝不能随程序分发，也不要把用这些字体生成的构建发给别人。
+_SYSTEM_FONTS = [
+    r"C:\Windows\Fonts\simsun.ttc",     # 宋体
+    r"C:\Windows\Fonts\simhei.ttf",     # 黑体
+    r"C:\Windows\Fonts\msyh.ttc",       # 微软雅黑
+    r"C:\Windows\Fonts\Deng.ttf",       # 等线
+    r"C:\Windows\Fonts\simkai.ttf",     # 楷体
+    r"C:\Windows\Fonts\simfang.ttf",    # 仿宋
+    "/System/Library/Fonts/PingFang.ttc",
+]
 
 # 系统中可能存在的开源中文字体（均为 OFL 授权），仅作兜底。
 # 注意：刻意不包含任何 Windows / macOS 自带商业字体。
@@ -96,34 +112,80 @@ def _list_font_files(fonts_dir: str) -> List[str]:
     return files
 
 
-def find_font_for_text(text: str, fontname_hint: str = "", fonts_dir: str = None):
-    """为 text 挑一个能正常显示它的开源字体文件，找不到返回 None。
+def _normalize_dirs(fonts_dir) -> List[str]:
+    """fonts_dir 可以是单个路径、路径列表或 None，统一成列表"""
+    if not fonts_dir:
+        return []
+    if isinstance(fonts_dir, (list, tuple)):
+        return [d for d in fonts_dir if d]
+    return [fonts_dir]
 
-    挑选顺序：
-      1. fonts 目录里风格匹配的字体（按原文字体名猜宋/黑/楷）
-      2. fonts 目录里其它正文字体
-      3. 系统中存在的开源中文字体（兜底）
-    每一档都用 has_glyph 实际校验字形覆盖，覆盖不全就继续找下一个。
-    """
-    files = _list_font_files(fonts_dir)
+
+def _wanted_style_keys(fontname_hint: str) -> tuple:
+    """按原文字体名判断想要哪种风格，返回该风格的关键词元组；判断不出返回空元组"""
     hint = (fontname_hint or "").lower()
-
-    ordered: List[str] = []
-
-    # 1) 风格匹配
     for keys, wanted in _FONT_STYLE_HINTS:
         if any(k in hint for k in keys):
-            ordered += [f for f in files if any(w in f.lower() for w in wanted)]
-            break
+            return wanted
+    return ()
 
-    # 2) 其余正文字体（Regular 优先，粗体/细体靠后）
-    regular = [f for f in files if not any(m in f.lower() for m in _NON_REGULAR_MARKS)]
-    others = [f for f in files if f not in regular]
-    ordered += regular + others
 
-    candidates = [os.path.join(fonts_dir, f) for f in ordered] if fonts_dir else []
+def find_font_for_text(text: str, fontname_hint: str = "", fonts_dir=None,
+                       extra_files=None, allow_system_fonts: bool = False):
+    """为 text 挑一个能正常显示它的字体文件，找不到返回 None。
+
+    参数：
+        fonts_dir        —— 字体目录，可以传一个路径，也可以传路径列表。
+                            列表按顺序查找，这样可以实现"用户自定义目录优先、
+                            程序内置目录兜底"，用户放个空目录也不会把内置字体屏蔽掉。
+        extra_files      —— 用户临时指定的字体文件（"选择字体文件"选中的），优先级最高。
+        allow_system_fonts —— 是否允许使用系统自带字体（宋体/黑体/雅黑等商业字体）。
+                            默认 False，只走开源字体；为 True 时才把系统字体纳入候选。
+
+    挑选顺序：
+        1. 用户指定的字体文件
+        2. 目录里风格匹配的字体（按字体**内部名称**匹配宋/黑/楷，不看文件名——
+           simsun.ttc 这种文件名里根本没有 "song"，按文件名匹配会认错）
+        3. 目录里其它正文字体
+        4. 系统里的开源中文字体（兜底）
+        5. allow_system_fonts 为 True 时，才加上系统商业字体
+    每一档都用 has_glyph 实际校验字形覆盖，覆盖不全就继续找下一个。
+    """
+    dirs = _normalize_dirs(fonts_dir)
+
+    # ① 用户明确指定的字体文件：直接用它，不参与风格排序。
+    #    用户既然亲手选了，就不该被"风格匹配"顶掉——之前就出过这个 bug：
+    #    选了 msyh.ttc，结果因为原文是宋体，被换成了内置的思源宋体。
+    for path in (extra_files or []):
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            font = fitz.Font(fontfile=path)
+        except Exception:
+            continue
+        if _font_covers(font, text):
+            return path
+
+    # ② 目录内候选（按目录顺序、Regular 优先）→ ③ 系统开源字体 → ④ 系统商业字体
+    candidates: List[str] = []
+    for d in dirs:
+        names = _list_font_files(d)
+        regular = [f for f in names if not any(m in f.lower() for m in _NON_REGULAR_MARKS)]
+        others = [f for f in names if f not in regular]
+        candidates += [os.path.join(d, f) for f in regular + others]
+
     candidates += _OPEN_LICENSE_CJK_FONTS
+    if allow_system_fonts:
+        candidates += _SYSTEM_FONTS
 
+    hint = (fontname_hint or "").lower()
+    hint_key = "".join(ch for ch in hint if ch.isalnum())
+    wanted = _wanted_style_keys(fontname_hint)
+
+    # 逐个体检：能读出来、且字形覆盖完整的才留下，并按匹配强度分三档
+    strong: List[str] = []      # 字体名就是原文用那个（SimHei → SimHei Regular）
+    matched: List[str] = []     # 同风格（宋→宋、黑→黑）
+    fallback: List[str] = []    # 能显示就行
     seen = set()
     for path in candidates:
         if path in seen or not os.path.exists(path):
@@ -133,9 +195,20 @@ def find_font_for_text(text: str, fontname_hint: str = "", fonts_dir: str = None
             font = fitz.Font(fontfile=path)
         except Exception:
             continue
-        if _font_covers(font, text):
-            return path
-    return None
+        if not _font_covers(font, text):
+            continue
+
+        family = (getattr(font, "name", "") or "").lower()
+        family_key = "".join(ch for ch in family if ch.isalnum())
+        if len(hint_key) >= 4 and hint_key in family_key:
+            strong.append(path)
+        elif wanted and any(w in family for w in wanted):
+            matched.append(path)
+        else:
+            fallback.append(path)
+
+    ordered = strong + matched + fallback
+    return ordered[0] if ordered else None
 
 
 def _font_alias(path: str) -> str:
@@ -162,13 +235,32 @@ class PyMuPDFTextReplacer:
             self.rules = self._load_rules_from_file(rules_source)
             logger.info(f"从文件 {rules_source} 加载了 {len(self.rules)} 条替换规则")
 
-        # 字体目录（只读查找，不主动创建）。
-        # 以前这里会 makedirs，打包成 exe 后每运行一次就会在程序旁边生成一个空的
-        # fonts 文件夹，很碍眼；缺目录时按"没找到字体"处理即可。
-        self.fonts_dir = "fonts"
+        # 字体目录列表（只读查找，不主动创建）。
+        # 用列表是为了支持"用户目录优先 + 内置目录兜底"：用户即使在程序旁边
+        # 建了个空 fonts 目录，也不会把程序内置的字体屏蔽掉。
+        self.fonts_dirs: List[str] = ["fonts"]
+
+        # 用户临时指定的字体文件（界面上"选择字体文件"挑的），优先级最高。
+        # 用于本机自用系统字体，不作为分发内容。
+        self.extra_fonts: List[str] = []
+
+        # 是否允许使用系统自带的商业中文字体（宋体/黑体/雅黑等）。
+        # 默认 False：只走开源字体，保证产出的 PDF 可以放心分发。
+        # 用户在界面上选"使用所有字体"时才置 True。
+        self.allow_system_fonts: bool = False
 
         # 字体解析缓存 {fontname提示 + 文本: 字体文件路径}
         self._font_path_cache: Dict[str, str | None] = {}
+
+    @property
+    def fonts_dir(self):
+        """兼容旧的单目录用法（读写第一个目录）"""
+        return self.fonts_dirs[0] if self.fonts_dirs else ""
+
+    @fonts_dir.setter
+    def fonts_dir(self, value):
+        self.fonts_dirs = [value] if value else []
+        self._font_path_cache.clear()
 
     def _load_rules_from_file(self, rules_file: str) -> Dict[str, str]:
         """
@@ -232,18 +324,27 @@ class PyMuPDFTextReplacer:
             raise
 
     def _find_local_font(self, font_name: str) -> str | None:
-        """在本地fonts文件夹中查找字体文件"""
-        for ext in ['.ttf', '.otf', '.ttc']:
-            for f in os.listdir(self.fonts_dir):
-                if f.lower().startswith(font_name.lower()) and f.lower().endswith(ext):
-                    return os.path.join(self.fonts_dir, f)
+        """在所有字体目录里按文件名前缀查找字体文件"""
+        for d in self.fonts_dirs:
+            if not d or not os.path.isdir(d):
+                continue
+            try:
+                names = sorted(os.listdir(d))
+            except OSError:
+                continue
+            for ext in ['.ttf', '.otf', '.ttc']:
+                for f in names:
+                    if f.lower().startswith(font_name.lower()) and f.lower().endswith(ext):
+                        return os.path.join(d, f)
         return None
 
     def _resolve_font(self, text: str, fontname_hint: str) -> str | None:
         """带缓存地为 text 找一个能显示它的字体文件"""
         key = f"{fontname_hint}\x00{text}"
         if key not in self._font_path_cache:
-            path = find_font_for_text(text, fontname_hint, self.fonts_dir)
+            path = find_font_for_text(text, fontname_hint, self.fonts_dirs,
+                                      extra_files=self.extra_fonts,
+                                      allow_system_fonts=self.allow_system_fonts)
             if path:
                 logger.info(f"文本 '{text[:20]}' 使用字体: {os.path.basename(path)}")
             else:
@@ -258,14 +359,20 @@ class PyMuPDFTextReplacer:
         否则原文字已经被擦掉、新文字又写不进去，只会留下一串"···"的废文件。
         """
         missing = [t for t in self.rules.values()
-                   if needs_unicode_font(t) and not find_font_for_text(t, "", self.fonts_dir)]
+                   if needs_unicode_font(t)
+                   and not find_font_for_text(t, "", self.fonts_dirs,
+                                              extra_files=self.extra_fonts,
+                                              allow_system_fonts=self.allow_system_fonts)]
         if missing:
             sample = "、".join(t[:15] for t in missing[:5])
             more = f" 等 {len(missing)} 条" if len(missing) > 5 else ""
+            dirs = "、".join(os.path.abspath(d) for d in self.fonts_dirs) or "（未配置）"
             raise RuntimeError(
                 f"缺少可用的中文字体，无法写入：{sample}{more}。\n"
                 f"请把开源中文字体（.ttf/.otf，例如思源黑体 / Noto Sans SC）"
-                f"放入字体目录：{os.path.abspath(self.fonts_dir)}"
+                f"放入字体目录：{dirs}\n"
+                f"或在界面「选项」里点「选择字体文件…」指定一个字体，"
+                f"也可以把「字体范围」切成「使用所有字体」以读取系统字体。"
             )
 
     @staticmethod
