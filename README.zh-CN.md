@@ -91,16 +91,38 @@ python gui.py
 
 ### 5. 打包成 .exe 文件
 
-确保 `fonts` 文件夹（以及任何自定义字体）位于项目根目录。然后，运行以下命令：
+字体要一起打进包里。注意 `fonts/_src/` 是构建用的原始可变字体（40MB+），**不要**打包进去，
+所以先挑出真正要分发的字体文件：
 
 ```bash
-pyinstaller --noconsole --onefile --name "PDF Replacer" --add-data "fonts;fonts" gui.py
-```
-- `--noconsole`: 运行 .exe时不显示命令行窗口。
-- `--onefile`: 将所有依赖项打包到一个可执行文件中。
-- `--add-data "fonts;fonts"`: 确保 `fonts` 文件夹被包含在包中。
+mkdir -p build/fonts_pack
+cp fonts/NotoSansSC-Regular.ttf fonts/NotoSerifSC-Regular.ttf \
+   fonts/LiberationSans-Bold.ttf fonts/OFL.txt fonts/README.md build/fonts_pack/
 
-最终的 `PDF Replacer.exe` 文件将位于 `dist` 文件夹中。
+pyinstaller --noconsole --onefile --name "PDF工具箱" \
+  --add-data "<项目绝对路径>/build/fonts_pack;fonts" \
+  --exclude-module onnxruntime --exclude-module pymupdf_layout --exclude-module pymupdf4llm \
+  --exclude-module networkx --exclude-module protobuf --exclude-module flatbuffers \
+  --exclude-module tabulate --exclude-module psutil --exclude-module yaml \
+  --exclude-module PIL --exclude-module fontTools \
+  --distpath . --workpath build/tmp --specpath build gui.py
+```
+
+- `--onefile`: 打成单个 exe，字体以资源形式内嵌，运行时解压到临时目录。
+- `--add-data` 的源路径要用**绝对路径**（因为 `--specpath` 会让相对路径相对 spec 目录解析）。
+- `--exclude-module`: 排除 PyMuPDF 附带的 layout/OCR 相关大包，能把体积从 66MB 降到 44MB。
+
+打包完清掉 `build/` 即可，目录里只留一个 exe。
+
+### 6. 打包后自检
+
+exe 是窗口程序没有控制台，自检结果会写到 `%TEMP%\pdfbox_selftest.log`：
+
+```bash
+"PDF工具箱.exe" --selftest
+```
+
+它会验证：字体是否随包解出、中文替换是否正常、区域擦除是否正常。退出码 0 表示通过。
 
 ## 命令行用法 (高级)
 

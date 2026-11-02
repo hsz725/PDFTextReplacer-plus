@@ -28,6 +28,21 @@ from pdf_eraser import (EraseTask, detect_background_color, erase_document,
 PT_PER_MM = 72.0 / 25.4
 
 
+def resource_path(relative_path: str) -> str:
+    """获取随程序分发的资源路径（主要是 fonts 目录）。
+
+    打包后优先用 exe 同级目录，这样用户能自己往 exe 旁边放中文字体；
+    找不到才退回 PyInstaller 的临时解包目录（_MEIPASS）。
+    """
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidate = os.path.join(exe_dir, relative_path)
+        if os.path.exists(candidate):
+            return candidate
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
+
+
 # --- GUI Logger ---
 class TextHandler(logging.Handler):
     """自定义日志处理器，将日志记录重定向到Tkinter的Text小部件"""
@@ -407,17 +422,8 @@ class App(tk.Tk):
         logger.addHandler(gui_handler)
 
     def get_resource_path(self, relative_path):
-        """获取资源的绝对路径。
-        打包后优先用 exe 同级目录，这样用户能自己往 exe 旁边放中文字体；
-        找不到才退回 PyInstaller 的临时解包目录（_MEIPASS）。
-        """
-        if getattr(sys, 'frozen', False):
-            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-            candidate = os.path.join(exe_dir, relative_path)
-            if os.path.exists(candidate):
-                return candidate
-        base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
-        return os.path.join(base_path, relative_path)
+        """兼容旧调用，实际逻辑在模块级 resource_path()"""
+        return resource_path(relative_path)
 
     # ---------------- 执行 ----------------
     def start_processing_thread(self):
@@ -554,6 +560,96 @@ class App(tk.Tk):
             messagebox.showerror("严重错误", f"处理失败，请查看日志获取详情。\n错误: {e}")
 
 
+# ---------------- 自检（打包后验证用） ----------------
+def run_selftest() -> int:
+    """不打开界面跑一遍中文替换和区域擦除，确认字体与核心链路可用。
+
+    用法:  PDF工具箱.exe --selftest
+    exe 是窗口程序没有控制台，所以结果同时写入 %TEMP%\\pdfbox_selftest.log。
+    退出码 0 = 全部通过。
+    """
+    import shutil
+    import tempfile
+
+    lines = []
+
+    def log(msg):
+        lines.append(msg)
+        try:
+            print(msg)
+        except Exception:
+            pass
+
+    def finish(code: int) -> int:
+        log_path = os.path.join(tempfile.gettempdir(), "pdfbox_selftest.log")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            log(f"[自检] 结果已写入 {log_path}")
+        except OSError:
+            pass
+        return code
+
+    fonts_dir = resource_path("fonts")
+    log(f"[自检] 字体目录: {fonts_dir}")
+    if not os.path.isdir(fonts_dir):
+        log("[自检] 失败：找不到 fonts 目录")
+        return finish(2)
+
+    font_files = sorted(f for f in os.listdir(fonts_dir)
+                        if f.lower().endswith((".ttf", ".otf")))
+    log(f"[自检] 字体文件: {font_files}")
+    cjk_font = next((os.path.join(fonts_dir, f) for f in font_files
+                     if "NotoSansSC" in f), None)
+    if not cjk_font:
+        log("[自检] 失败：没有中文字体")
+        return finish(2)
+
+    tmp = tempfile.mkdtemp(prefix="pdfbox_selftest_")
+    src = os.path.join(tmp, "in.pdf")
+    out_replace = os.path.join(tmp, "out_replace.pdf")
+    out_erase = os.path.join(tmp, "out_erase.pdf")
+
+    # 造一个带中文和色块的测试页
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.insert_text((50, 80), "旧公司名称 张三", fontfile=cjk_font,
+                     fontname="NS", fontsize=14)
+    page.draw_rect(pymupdf.Rect(40, 120, 200, 180), color=None,
+                   fill=(0.9, 0.2, 0.2), width=0)
+    doc.save(src)
+    doc.close()
+
+    ok = True
+
+    # 1) 中文替换
+    replacer = PyMuPDFTextReplacer({"旧公司名称": "新公司名称"})
+    replacer.fonts_dir = fonts_dir
+    replacer.replace_pdf(src, out_replace, method="precise")
+    text = pymupdf.open(out_replace)[0].get_text()
+    if "新公司名称" in text:
+        log("[自检] 中文替换: 通过")
+    else:
+        log(f"[自检] 中文替换: 失败，输出文本 = {text!r}")
+        ok = False
+
+    # 2) 区域擦除
+    rect = ui_rect_to_pdf_rect(30, 110, 190, 80)
+    erase_document(src, out_erase, [EraseTask(page_index=0, rect=rect)])
+    pixel = pymupdf.open(out_erase)[0].get_pixmap(dpi=72).pixel(100, 150)
+    if pixel == (255, 255, 255):
+        log("[自检] 区域擦除: 通过")
+    else:
+        log(f"[自检] 区域擦除: 失败，取样颜色 = {pixel}")
+        ok = False
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    log("[自检] 全部通过" if ok else "[自检] 存在失败项")
+    return finish(0 if ok else 1)
+
+
 if __name__ == '__main__':
+    if "--selftest" in sys.argv:
+        sys.exit(run_selftest())
     app = App()
     app.mainloop()
