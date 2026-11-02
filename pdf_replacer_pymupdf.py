@@ -162,14 +162,10 @@ class PyMuPDFTextReplacer:
             self.rules = self._load_rules_from_file(rules_source)
             logger.info(f"从文件 {rules_source} 加载了 {len(self.rules)} 条替换规则")
 
-        # 定义并创建字体目录
+        # 字体目录（只读查找，不主动创建）。
+        # 以前这里会 makedirs，打包成 exe 后每运行一次就会在程序旁边生成一个空的
+        # fonts 文件夹，很碍眼；缺目录时按"没找到字体"处理即可。
         self.fonts_dir = "fonts"
-        try:
-            if not os.path.exists(self.fonts_dir):
-                os.makedirs(self.fonts_dir)
-                logger.info(f"创建字体目录: {self.fonts_dir}")
-        except OSError as e:
-            logger.warning(f"字体目录创建失败（不影响使用）: {e}")
 
         # 字体解析缓存 {fontname提示 + 文本: 字体文件路径}
         self._font_path_cache: Dict[str, str | None] = {}
