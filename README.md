@@ -13,10 +13,14 @@ extended with region erasing, open-license CJK fonts, and a light build.
 Both editions are built from the **same source code** — the light edition simply hides
 the erase tab. They are almost identical in size, so pick by workflow, not by size.
 
-| Edition | File | Features |
-|---|---|---|
-| **Full** | `PDF工具箱.exe` | Text replacement **+** region erasing |
-| **Light** | `PDF文本替换工具.exe` | Text replacement only, single-screen UI |
+| Edition | Download | Local build | Features |
+|---|---|---|---|
+| **Full** | `PDFToolbox.exe` | `PDF工具箱.exe` | Text replacement **+** region erasing |
+| **Light** | `PDFToolbox-Lite.exe` | `PDF文本替换工具.exe` | Text replacement only, single-screen UI |
+
+> Download names are ASCII because GitHub drops non-ASCII characters from release
+> asset names — two Chinese-named files would collide into one. The app itself,
+> its UI and docs are all in Chinese.
 
 Download either one from the [Releases](../../releases) page. Both are single-file
 executables — no installation, no extra folders.
